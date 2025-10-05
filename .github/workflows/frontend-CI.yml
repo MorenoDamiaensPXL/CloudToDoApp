@@ -29,11 +29,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag falen in CI)
+      # 4) Build (mag falen)
       - name: Build the code
         run: npx ng build --configuration production || true
 
-      # 5) CI-karma-config die altijd LCOV + HTML schrijft
+      # 5) Karma CI config forceren
       - name: Create CI Karma config (forces LCOV + HTML)
         run: |
           cat > karma.ci.conf.js <<'JS'
@@ -45,8 +45,8 @@ jobs:
               coverageReporter: {
                 dir: path.join(__dirname, 'coverage'),
                 reporters: [
-                  { type: 'lcovonly', subdir: '.' },   // => coverage/lcov.info
-                  { type: 'html',     subdir: 'html' } // => coverage/html/
+                  { type: 'lcovonly', subdir: '.' },
+                  { type: 'html', subdir: 'html' }
                 ],
                 fixWebpackSourcePaths: true
               }
@@ -54,13 +54,13 @@ jobs:
           };
           JS
 
-      # 6) Tests (headless Chrome zonder sandbox) + coverage
+      # 6) Unit tests + coverage
       - name: Run unit tests with CI Karma config (write LCOV)
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb
-          # Chrome wrapper zonder sandbox
+          # Chrome zonder sandbox
           cat << 'SH' > /tmp/chrome-no-sandbox.sh
           #!/usr/bin/env bash
           BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
@@ -68,14 +68,11 @@ jobs:
           SH
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
-
-          # Gebruik CI-config; laat job doorlopen bij fails
           xvfb-run -a npx ng test --watch=false --browsers=ChromeHeadless --code-coverage --karma-config=karma.ci.conf.js || true
-
           echo "== After tests, list coverage files =="
           find coverage -type f -maxdepth 6 -print || true
 
-      # 7) Normaliseer naar één pad (coverage/lcov.info)
+      # 7) Normaliseer naar LCOV
       - name: Normalize coverage to LCOV (coverage/lcov.info)
         if: always()
         shell: bash
@@ -92,46 +89,38 @@ jobs:
               npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
               [ -f "$COVDIR/lcov.info" ] && cp "$COVDIR/lcov.info" coverage/lcov.info || true
             fi
-            if [ -f coverage/lcov.info ] && [ -s coverage/lcov.info ]; then
-              echo "✅ Normalized LCOV at coverage/lcov.info"
-            else
-              echo "❌ Still no usable LCOV."
-            fi
           fi
 
-      # 8) (debug) toon waar coveragebestanden liggen
-      - name: Inspect raw coverage tree
+      # 8) Folder entries verwijderen uit LCOV
+      - name: Clean LCOV of folder-only entries
         if: always()
         run: |
-          echo "PWD=$(pwd)"
-          find . -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -maxdepth 8 -print || true
-
-      # 9) Verifieer LCOV (niet leeg) zodat reporter alleen draait bij echte data
-      - name: Verify LCOV exists and is non-empty
-        if: always()
-        shell: bash
-        run: |
-          if [ ! -s coverage/lcov.info ]; then
-            echo "No usable LCOV (missing or empty). Reporter will be skipped."
-            exit 0
+          if [ -f coverage/lcov.info ]; then
+            echo "🧹 Cleaning folder entries from LCOV..."
+            # Filter enkel echte bestanden (met extensie)
+            grep -E 'SF:.*\.[a-zA-Z0-9]+$|^DA:|^end_of_record' coverage/lcov.info > coverage/lcov.cleaned
+            mv coverage/lcov.cleaned coverage/lcov.info
+            echo "✅ LCOV cleaned and ready"
+          else
+            echo "⚠️ No LCOV found to clean."
           fi
-          echo "LCOV OK: $(wc -l coverage/lcov.info | awk '{print $1}') lines"
 
-      # 10) Better Test Reports (rijke tabel in de Summary)
+      # 9) Better Test Reports Action
       - name: Better Test Reports Action
-        if: ${{ always() && hashFiles('frontend/coverage/lcov.info') != '' }}
+        if: always()
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: frontend
-          coverage-file: frontend/coverage/lcov.info   # <-- repo-root pad
+          coverage-file: frontend/coverage/lcov.info
+          upload-coverage-report: true
 
-      # 11) HTML coverage uploaden als artefact (nooit meer 409)
+      # 10) HTML coverage uploaden
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: frontend/coverage/**
+          path: |
+            frontend/coverage/**
+            frontend/**/coverage/**
           if-no-files-found: ignore
-          overwrite: true
