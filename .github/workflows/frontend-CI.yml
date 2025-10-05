@@ -124,8 +124,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: frontend
-          coverage-file: coverage/lcov.info
-          upload-coverage-report: true
+          coverage-file: frontend/coverage/lcov.info   # <-- repo-root pad
 
       # 11) HTML coverage uploaden als artefact (nooit meer 409)
       - name: Upload coverage HTML
