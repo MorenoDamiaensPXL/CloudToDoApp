@@ -76,7 +76,6 @@ jobs:
           find coverage -type f -maxdepth 6 -print || true
 
       # 7) Normaliseer naar één pad (frontend/coverage/lcov.info)
-      #    ✅ FIX: geen 'cd frontend' meer; de working-directory is al frontend
       - name: Normalize coverage to LCOV (frontend/coverage/lcov.info)
         if: always()
         shell: bash
@@ -100,14 +99,20 @@ jobs:
             fi
           fi
 
-      # 8) (debug) toon waar coveragebestanden liggen
+      # 8) (optioneel) cosmetisch: paden netter maken
+      - name: Make LCOV paths relative to frontend (cosmetic)
+        if: always()
+        run: |
+          sed -i 's#SF:.*frontend/src/#SF:src/#' coverage/lcov.info || true
+
+      # 9) (debug) toon waar coveragebestanden liggen
       - name: Inspect raw coverage tree
         if: always()
         run: |
           echo "PWD=$(pwd)"
           find . -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -maxdepth 8 -print || true
 
-      # 9) Verifieer LCOV (niet leeg) zodat reporter alleen draait bij echte data
+      # 10) Verifieer LCOV (niet leeg) zodat reporter alleen draait bij echte data
       - name: Verify LCOV exists and is non-empty
         if: always()
         shell: bash
@@ -118,13 +123,28 @@ jobs:
           fi
           echo "LCOV OK: $(wc -l frontend/coverage/lcov.info | awk '{print $1}') lines"
 
-      # 10) Better Test Reports (rijke tabel in de Summary)
+      # 11) Better Test Reports (rijke tabel in de Summary)
       - name: Better Test Reports Action
         if: ${{ always() && hashFiles('frontend/coverage/lcov.info') != '' }}
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           coverage-file: frontend/coverage/lcov.info
+          working-directory: frontend
+          upload-coverage-report: true
+
+      # 12) HTML coverage uploaden als artefact
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            frontend/coverage/**
+            frontend/**/coverage/**
+          if-no-files-found: ignore
+          coverage-file: frontend/coverage/lcov.info
+          working-directory: frontend
           upload-coverage-report: true
 
       # 11) HTML coverage uploaden als artefact
