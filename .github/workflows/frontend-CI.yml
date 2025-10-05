@@ -1,94 +1,59 @@
-name: Frontend
+name: Backend
 
 on:
   push:
-    paths:
-      - "frontend/**"
-      - ".github/workflows/frontend-CI.yml"
+    branches: [ main ]
   pull_request:
-    paths:
-      - "frontend/**"
 
 jobs:
-  build-test:
+  build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
 
     steps:
-      - name: Checkout
+      # 1) Check out de code op de runner
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node (Angular 12 ↔ Node 18)
+      # 2) Node/NPM klaarzetten (juiste versie voor Angular-projecten)
+      #    Pas '18' aan naar wat je project vereist (bv. 20) indien nodig.
+      - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "frontend/package-lock.json"
+          node-version: '18'
+          cache: 'npm'
 
+      # 3) Dependencies installeren (geeft je de project-lokale Angular CLI)
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Setup Chrome (for Karma)
-        id: chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Build Angular app
+      # 4) Build (via de *project-lokale* Angular CLI met npx)
+      - name: Build the code
         run: npx ng build --configuration production
 
-      # Maak tijdelijk een CI-variant van de Karma-config met no-sandbox flags
-      - name: Patch Karma config for GitHub Actions
+      # 5) Unit tests met coverage
+      #    Veel Angular-projecten gebruiken Karma + ChromeHeadless.
+      #    xvfb-run zorgt dat headless Chrome netjes kan draaien op de CI-runner.
+      - name: Test the code (unit tests + coverage)
         run: |
-          echo "module.exports = function (config) {
-            require('./karma.conf.js')(config);
-            config.set({
-              browsers: ['ChromeHeadlessNoSandbox'],
-              customLaunchers: {
-                ChromeHeadlessNoSandbox: {
-                  base: 'ChromeHeadless',
-                  flags: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
-                }
-              }
-            });
-          };" > karma.conf.ci.js
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless
 
-      - name: Run unit tests with coverage (no sandbox)
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-        run: |
-          npx karma start karma.conf.ci.js --single-run
-          echo "Coverage files under frontend/coverage:"
-          ls -R coverage || true
-
-      - name: Coverage summary (Job Summary)
-        if: ${{ hashFiles('frontend/coverage/**/lcov.info') != '' }}
+      # 6) Coverage samenvatting in de run-overview (Job Summary)
+      - name: Generate coverage summary
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
-          filename: "frontend/coverage/**/lcov.info"
+          filename: coverage/**/lcov.info
           badge: true
-          format: "markdown"
-          thresholds: "60 80"
+          fail_below_min: false
+          format: markdown
+          hide_complexity: true
+          output: both
+          thresholds: '60 80'
 
-      - name: Better Test Reports (table in summary)
-        if: ${{ hashFiles('frontend/coverage/**/lcov.info') != '' }}
-        uses: mridang/action-test-reporter@v1.3.0
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: frontend
-          coverage-file: frontend/coverage/**/lcov.info
-          upload-coverage-report: true
-
-      - name: Upload coverage artifact
+      # 7) Volledige HTML coverage uploaden als artifact (te downloaden)
+      - name: Upload coverage HTML
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-coverage
-          path: frontend/coverage
-          if-no-files-found: ignore
-
-      - name: Upload production build
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
-          if-no-files-found: warn
+          name: coverage-report
+          path: coverage/**
