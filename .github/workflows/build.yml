@@ -26,9 +26,15 @@ jobs:
             npm install
           fi
 
-      - name: Build
+      - name: Build the code
         run: |
-          npm run build || echo "No build script defined — skipping"
-          
-      - name: Verify workspace (ls -alhR)
-        run: ls -alhR
+          if npm run | grep -q "build"; then
+            npm run build
+          else
+            echo "⚠️ No build script found, skipping build step."
+          fi
+
+      - name: Verify build output
+        run: |
+          echo "Build directory structure:"
+          ls -alhR dist || ls -alhR build || echo "⚠️ No dist/build folder found."
