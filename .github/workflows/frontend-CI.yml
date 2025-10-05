@@ -9,40 +9,40 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # => ALLE npm/ng commando’s in de submap ./frontend uitvoeren
+    # Voer alle run-commando's uit in de frontend-map
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      # 1) Checkout code op de runner
-      - name: Checkout repository
+      # 1) Code naar de runner
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node + npm klaarzetten (cache op je lockfile in frontend/)
+      # 2) Node/NPM klaarzetten (cache op lockfile)
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '18'                  # kies de versie die je doc voorschrijft
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      # 3) Dependencies installeren (vereist de lockfile)
+      # 3) Dependencies (NPM & Angular CLI uit package.json)
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (Angular)
+      # 4) Build met Angular
       - name: Build the code
         run: npx ng build --configuration production
 
-      # 5) Unit tests met coverage (headless Chrome)
+      # 5) Unit tests mét coverage (headless browser)
       - name: Test the code (unit tests + coverage)
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
           xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless
 
-      # 6) Mooi coverage-overzicht in de run (Job Summary)
+      # 6) Mooier coverage-rapport in de run-overview
       - name: Generate coverage summary
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
@@ -54,7 +54,7 @@ jobs:
           output: both
           thresholds: '60 80'
 
-      # 7) Volledige HTML coverage als artifact
+      # (optioneel) HTML rapport als artifact
       - name: Upload coverage HTML
         uses: actions/upload-artifact@v4
         with:
