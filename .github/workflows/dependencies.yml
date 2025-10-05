@@ -7,6 +7,11 @@ on:
 jobs:
   deps:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend   # 👈 Belangrijk: in backend map werken
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,6 +21,21 @@ jobs:
         with:
           node-version: 18
           cache: npm
+          cache-dependency-path: backend/package-lock.json
 
-      - name: Show workspace
-        run: ls -alhR
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Verify install
+        run: |
+          echo "Node version:"
+          node -v
+          echo "NPM version:"
+          npm -v
+          echo "Dependencies in backend:"
+          ls -alh
