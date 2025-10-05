@@ -73,8 +73,7 @@ jobs:
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: frontend
-          coverage-file: coverage/lcov.info
+          coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
 
       # 8) HTML coverage als artifact (pad is t.o.v. repo-root, dus mét 'frontend/')
