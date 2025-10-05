@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node/NPM
+      # 2) Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -29,42 +29,41 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag ontbreken; laat dan doorlopen)
+      # 4) Build (mag ontbreken)
       - name: Build the code
         run: npm run build || true
 
-      # 5) Tests + coverage (robust: jest óf nyc-wrap)
+      # 5) Tests + coverage (forceer via nyc, ongeacht testrunner)
       - name: Run unit tests with coverage
         run: |
           set -euxo pipefail
+          # Forceer LCOV + HTML in ./coverage, ook wanneer files niet direct geïmporteerd worden
+          npx nyc@15.1.0 \
+            --all \
+            --reporter=lcov \
+            --reporter=html \
+            --report-dir=coverage \
+            --extension .ts \
+            --extension .js \
+            npm test || true
 
-          echo "== Probeer eerst Jest (indien aanwezig) =="
-          if [ -f node_modules/.bin/jest ] || npx --yes jest --version >/dev/null 2>&1; then
-            # Forceer lcov + html output in ./coverage/
-            npx jest --coverage --coverageReporters=lcov --coverageReporters=html || true
-          else
-            echo "== Geen Jest gedetecteerd, voer tests onder nyc uit =="
-            # NYC instrumenteert je bestaande tests en schrijft lcov + html naar ./coverage/
-            npx nyc@15.1.0 --reporter=lcov --reporter=html --report-dir=coverage npm test || true
-          fi
+          echo "== Coverage bestanden =="
+          find . -maxdepth 6 -type f \( -name lcov.info -o -name coverage-final.json -o -name index.html \) -print || true
 
-          echo "== Na tests, toon coverage-bestanden =="
-          find . -maxdepth 6 -type f \( -name 'lcov.info' -o -name 'coverage-final.json' -o -name 'index.html' \) -print || true
-
-      # 6) Normaliseer naar 1 LCOV-pad (backend/coverage/lcov.info)
+      # 6) Normaliseer naar backend/coverage/lcov.info
       - name: Ensure LCOV exists
         id: ensure_lcov
         shell: bash
         run: |
           set -euo pipefail
 
-          # 1) als coverage/lcov.info bestaat, gebruik die
+          # 1) rechtstreekse output
           if [ -s coverage/lcov.info ]; then
             echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # 2) anders één elders zoeken (sommige frameworks nestelen anders)
+          # 2) ergens dieper? (sommige runners nestelen het)
           LFOUND="$(ls -1 coverage/**/lcov.info 2>/dev/null | head -n1 || true)"
           if [ -n "$LFOUND" ] && [ -s "$LFOUND" ]; then
             mkdir -p coverage
@@ -73,11 +72,10 @@ jobs:
             exit 0
           fi
 
-          # 3) anders: als alleen JSON aanwezig is, converteer met nyc
+          # 3) JSON -> LCOV conversie als laatste redmiddel
           JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
           if [ -n "${JSON:-}" ]; then
             COVDIR="$(dirname "$JSON")"
-            echo "Converteer JSON -> LCOV met nyc report vanuit: $COVDIR"
             npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
             if [ -s "$COVDIR/lcov.info" ]; then
               mkdir -p coverage
@@ -90,7 +88,7 @@ jobs:
           echo "Geen LCOV beschikbaar."
           echo "lcov=" >> "$GITHUB_OUTPUT"
 
-      # 7) Mooie tabel in de Summary (als LCOV er is)
+      # 7) Mooie tabel in job Summary (zelfde als frontend)
       - name: Better Test Reports Action
         if: ${{ steps.ensure_lcov.outputs.lcov != '' }}
         uses: mridang/action-test-reporter@v1.3.0
@@ -100,7 +98,7 @@ jobs:
           coverage-file: ${{ steps.ensure_lcov.outputs.lcov }}
           upload-coverage-report: true
 
-      # 8) HTML coverage als artifact (indien aanwezig)
+      # 8) HTML coverage als artifact
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
