@@ -35,7 +35,7 @@ jobs:
       - name: Build the code
         run: npx ng build --configuration production
 
-      # 5) Tests + coverage (laat de job doorgaan ook als tests falen)
+            # 5) Tests + coverage (laat doorlopen bij failures)
       - name: Test the code (unit tests + coverage)
         run: |
           sudo apt-get update
@@ -52,35 +52,33 @@ jobs:
           xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless || true
         continue-on-error: true
 
-      # 6) Normaliseer het pad naar één bestand (de action verwacht geen glob)
+      # 6) Normaliseer naar één bestand binnen ./frontend (NIET prefixen met 'frontend/')
       - name: Locate/normalize lcov path
         if: always()
         run: |
-          mkdir -p frontend/coverage
-          # Zoek een lcov.info (Angular zet die typisch in coverage/<project>/lcov.info)
-          FOUND=$(ls -1 frontend/coverage/*/lcov.info 2>/dev/null | head -n 1 || true)
+          mkdir -p coverage
+          FOUND=$(ls -1 coverage/*/lcov.info 2>/dev/null | head -n 1 || true)
           if [ -n "$FOUND" ]; then
-            cp "$FOUND" frontend/coverage/lcov.info
-            echo "Using $FOUND -> frontend/coverage/lcov.info"
-          elif [ -f frontend/coverage/lcov.info ]; then
-            echo "Using existing frontend/coverage/lcov.info"
+            cp "$FOUND" coverage/lcov.info
+            echo "Using $FOUND -> coverage/lcov.info"
+          elif [ -f coverage/lcov.info ]; then
+            echo "Using existing coverage/lcov.info"
           else
-            # fallback dummy zodat de reporter nooit crasht
-            echo -e "TN:\nSF:dummy.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record" > frontend/coverage/lcov.info
-            echo "Created dummy frontend/coverage/lcov.info"
+            echo -e "TN:\nSF:dummy.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record" > coverage/lcov.info
+            echo "Created dummy coverage at coverage/lcov.info"
           fi
 
-      # 7) Better Test Reports Action (v1.3.0) — verschijnt in de Run Summary
+      # 7) Better Test Reports Action (pad is relatief tot working-directory=frontend)
       - name: Better Test Reports Action
         if: always()
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: frontend
-          coverage-file: frontend/coverage/lcov.info
+          coverage-file: coverage/lcov.info
           upload-coverage-report: true
 
-      # 8) (optioneel) HTML coverage uploaden (als aanwezig)
+      # 8) HTML coverage als artifact (pad is t.o.v. repo-root, dus mét 'frontend/')
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
