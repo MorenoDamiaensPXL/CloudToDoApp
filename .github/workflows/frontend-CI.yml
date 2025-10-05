@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node.js klaarzetten (npm cache op frontend/packge-lock.json)
+      # 2) Node.js klaarzetten
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
@@ -25,30 +25,28 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # 3) Dependencies installeren
+      # 3) Dependencies
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag falen, de focus is CI + tests)
+      # 4) Build (mag falen in CI)
       - name: Build the code
         run: npx ng build --configuration production || true
 
-      # 5) Maak een CI-karma-config die altijd LCOV + HTML schrijft
+      # 5) CI-karma-config die altijd LCOV + HTML schrijft
       - name: Create CI Karma config (forces LCOV + HTML)
         run: |
           cat > karma.ci.conf.js <<'JS'
           const path = require('path');
           module.exports = function (config) {
-            // Laad de bestaande karma.conf.js
             require('./karma.conf.js')(config);
-            // Forceer coverage-reporters naar vaste plek
             config.set({
               reporters: ['progress', 'coverage'],
               coverageReporter: {
-                dir: path.join(__dirname, 'coverage'),   // => frontend/coverage/
+                dir: path.join(__dirname, 'coverage'),
                 reporters: [
-                  { type: 'lcovonly', subdir: '.' },     // => frontend/coverage/lcov.info
-                  { type: 'html',     subdir: 'html' }   // => frontend/coverage/html/
+                  { type: 'lcovonly', subdir: '.' },   // => coverage/lcov.info
+                  { type: 'html',     subdir: 'html' } // => coverage/html/
                 ],
                 fixWebpackSourcePaths: true
               }
@@ -56,7 +54,7 @@ jobs:
           };
           JS
 
-      # 6) Tests draaien (headless Chrome zonder sandbox) + coverage
+      # 6) Tests (headless Chrome zonder sandbox) + coverage
       - name: Run unit tests with CI Karma config (write LCOV)
         run: |
           set -euxo pipefail
@@ -71,20 +69,19 @@ jobs:
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
 
-          # Belangrijk: gebruik de CI-config; laat job doorlopen bij fails
+          # Gebruik CI-config; laat job doorlopen bij fails
           xvfb-run -a npx ng test --watch=false --browsers=ChromeHeadless --code-coverage --karma-config=karma.ci.conf.js || true
 
           echo "== After tests, list coverage files =="
           find coverage -type f -maxdepth 6 -print || true
 
-      # 7) Normaliseer naar één pad (frontend/coverage/lcov.info).
-      #    Als karma alleen coverage-final.json schrijft, converteer naar lcov met nyc.
+      # 7) Normaliseer naar één pad (frontend/coverage/lcov.info)
+      #    ✅ FIX: geen 'cd frontend' meer; de working-directory is al frontend
       - name: Normalize coverage to LCOV (frontend/coverage/lcov.info)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          cd frontend
           mkdir -p coverage
           if [ -f coverage/lcov.info ] && [ -s coverage/lcov.info ]; then
             echo "✅ LCOV present at coverage/lcov.info"
@@ -103,14 +100,14 @@ jobs:
             fi
           fi
 
-      # 8) (Optioneel) Toon waar coverage staat voor debug
+      # 8) (debug) toon waar coveragebestanden liggen
       - name: Inspect raw coverage tree
         if: always()
         run: |
           echo "PWD=$(pwd)"
           find . -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -maxdepth 8 -print || true
 
-      # 9) Verifieer dat LCOV bruikbaar is (niet leeg). Zo ja, maak het rapport.
+      # 9) Verifieer LCOV (niet leeg) zodat reporter alleen draait bij echte data
       - name: Verify LCOV exists and is non-empty
         if: always()
         shell: bash
@@ -121,7 +118,7 @@ jobs:
           fi
           echo "LCOV OK: $(wc -l frontend/coverage/lcov.info | awk '{print $1}') lines"
 
-      # 10) Better Test Reports (mooie tabel in de run summary)
+      # 10) Better Test Reports (rijke tabel in de Summary)
       - name: Better Test Reports Action
         if: ${{ always() && hashFiles('frontend/coverage/lcov.info') != '' }}
         uses: mridang/action-test-reporter@v1.3.0
@@ -130,7 +127,7 @@ jobs:
           coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
 
-      # 11) HTML coverage uploaden als artefact (open lokaal index.html)
+      # 11) HTML coverage uploaden als artefact
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
