@@ -13,11 +13,9 @@ jobs:
         working-directory: frontend
 
     steps:
-      # 1) Code ophalen
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node.js klaarzetten
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
@@ -25,15 +23,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # 3) Dependencies
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag falen)
       - name: Build the code
         run: npx ng build --configuration production || true
 
-      # 5) Karma CI config forceren
       - name: Create CI Karma config (forces LCOV + HTML)
         run: |
           cat > karma.ci.conf.js <<'JS'
@@ -46,7 +41,7 @@ jobs:
                 dir: path.join(__dirname, 'coverage'),
                 reporters: [
                   { type: 'lcovonly', subdir: '.' },
-                  { type: 'html', subdir: 'html' }
+                  { type: 'html',     subdir: 'html' }
                 ],
                 fixWebpackSourcePaths: true
               }
@@ -54,13 +49,11 @@ jobs:
           };
           JS
 
-      # 6) Unit tests + coverage
       - name: Run unit tests with CI Karma config (write LCOV)
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb
-          # Chrome zonder sandbox
           cat << 'SH' > /tmp/chrome-no-sandbox.sh
           #!/usr/bin/env bash
           BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
@@ -69,10 +62,8 @@ jobs:
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
           xvfb-run -a npx ng test --watch=false --browsers=ChromeHeadless --code-coverage --karma-config=karma.ci.conf.js || true
-          echo "== After tests, list coverage files =="
-          find coverage -type f -maxdepth 6 -print || true
+          echo "== After tests, list coverage files =="; find coverage -type f -maxdepth 6 -print || true
 
-      # 7) Normaliseer naar LCOV
       - name: Normalize coverage to LCOV (coverage/lcov.info)
         if: always()
         shell: bash
@@ -91,21 +82,26 @@ jobs:
             fi
           fi
 
-      # 8) Folder entries verwijderen uit LCOV
-      - name: Clean LCOV of folder-only entries
+      # 🔧 Belangrijke fix: houd ALLE LCOV-records, maar maak padnamen plat (geen mappen => geen folder-rows)
+      - name: Flatten LCOV paths (remove directories, keep all metrics)
         if: always()
         run: |
-          if [ -f coverage/lcov.info ]; then
-            echo "🧹 Cleaning folder entries from LCOV..."
-            # Filter enkel echte bestanden (met extensie)
-            grep -E 'SF:.*\.[a-zA-Z0-9]+$|^DA:|^end_of_record' coverage/lcov.info > coverage/lcov.cleaned
-            mv coverage/lcov.cleaned coverage/lcov.info
-            echo "✅ LCOV cleaned and ready"
+          if [ -s coverage/lcov.info ]; then
+            awk '
+              /^SF:/ {
+                # Vervang pad door alleen de bestandsnaam
+                n = split($0, a, /[\/\\]/);
+                print "SF:" a[n];
+                next
+              }
+              { print }
+            ' coverage/lcov.info > coverage/lcov.flattened
+            mv coverage/lcov.flattened coverage/lcov.info
+            echo "✅ Flattened paths in LCOV; directories zullen niet meer gegroepeerd worden."
           else
-            echo "⚠️ No LCOV found to clean."
+            echo "⚠️ No LCOV to flatten."
           fi
 
-      # 9) Better Test Reports Action
       - name: Better Test Reports Action
         if: always()
         uses: mridang/action-test-reporter@v1.3.0
@@ -113,8 +109,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
+          working-directory: frontend
 
-      # 10) HTML coverage uploaden
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
@@ -124,3 +120,4 @@ jobs:
             frontend/coverage/**
             frontend/**/coverage/**
           if-no-files-found: ignore
+          overwrite: true
