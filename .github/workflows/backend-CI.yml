@@ -8,7 +8,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Alles onder /backend uitvoeren
     defaults:
       run:
         working-directory: backend
@@ -18,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node/NPM klaarzetten
+      # 2) Node/NPM
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -30,71 +29,78 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag ontbreken; dan laten we de job doorlopen)
+      # 4) Build (mag ontbreken; laat dan doorlopen)
       - name: Build the code
         run: npm run build || true
 
-      # 5) Tests + coverage (laat job doorlopen bij failures)
-      - name: Test code (unit tests + coverage)
+      # 5) Tests + coverage (robust: jest óf nyc-wrap)
+      - name: Run unit tests with coverage
         run: |
           set -euxo pipefail
-          # Probeer standaard coverage te genereren
-          npm test -- --coverage || true
 
-          echo "== Na tests, toon coverage-files =="
-          find . -maxdepth 6 -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -print || true
+          echo "== Probeer eerst Jest (indien aanwezig) =="
+          if [ -f node_modules/.bin/jest ] || npx --yes jest --version >/dev/null 2>&1; then
+            # Forceer lcov + html output in ./coverage/
+            npx jest --coverage --coverageReporters=lcov --coverageReporters=html || true
+          else
+            echo "== Geen Jest gedetecteerd, voer tests onder nyc uit =="
+            # NYC instrumenteert je bestaande tests en schrijft lcov + html naar ./coverage/
+            npx nyc@15.1.0 --reporter=lcov --reporter=html --report-dir=coverage npm test || true
+          fi
 
-      # 6) Normaliseer: als alleen JSON bestaat, maak LCOV aan met nyc
-      - name: Ensure LCOV exists (convert from coverage-final.json if needed)
+          echo "== Na tests, toon coverage-bestanden =="
+          find . -maxdepth 6 -type f \( -name 'lcov.info' -o -name 'coverage-final.json' -o -name 'index.html' \) -print || true
+
+      # 6) Normaliseer naar 1 LCOV-pad (backend/coverage/lcov.info)
+      - name: Ensure LCOV exists
+        id: ensure_lcov
         shell: bash
         run: |
           set -euo pipefail
-          # Bestaat er al een lcov.info ergens onder backend/coverage?
-          FOUND="$(ls -1 coverage/lcov.info coverage/**/lcov.info 2>/dev/null | head -n1 || true)"
-          if [ -n "$FOUND" ] && [ -s "$FOUND" ]; then
-            echo "✅ LCOV gevonden: $FOUND"
-          else
-            JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
-            if [ -n "${JSON:-}" ]; then
-              COVDIR="$(dirname "$JSON")"
-              echo "Geen LCOV, wel JSON. Converteer met nyc vanuit: $JSON"
-              npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
-              # Kopieer naar gestandaardiseerde plek
+
+          # 1) als coverage/lcov.info bestaat, gebruik die
+          if [ -s coverage/lcov.info ]; then
+            echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 2) anders één elders zoeken (sommige frameworks nestelen anders)
+          LFOUND="$(ls -1 coverage/**/lcov.info 2>/dev/null | head -n1 || true)"
+          if [ -n "$LFOUND" ] && [ -s "$LFOUND" ]; then
+            mkdir -p coverage
+            cp "$LFOUND" coverage/lcov.info
+            echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 3) anders: als alleen JSON aanwezig is, converteer met nyc
+          JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
+          if [ -n "${JSON:-}" ]; then
+            COVDIR="$(dirname "$JSON")"
+            echo "Converteer JSON -> LCOV met nyc report vanuit: $COVDIR"
+            npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
+            if [ -s "$COVDIR/lcov.info" ]; then
               mkdir -p coverage
-              if [ -f "$COVDIR/lcov.info" ]; then
-                cp "$COVDIR/lcov.info" coverage/lcov.info
-                echo "✅ LCOV geschreven naar coverage/lcov.info"
-              fi
-            else
-              echo "⚠️ Geen coverage-bestanden gevonden."
+              cp "$COVDIR/lcov.info" coverage/lcov.info
+              echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           fi
 
-      # 7) Zoek het LCOV-bestand en geef pad door aan volgende stappen
-      - name: Find LCOV path
-        id: findcov
-        shell: bash
-        run: |
-          set -euo pipefail
-          FOUND="$(ls -1 coverage/lcov.info coverage/**/lcov.info 2>/dev/null | head -n1 || true)"
-          echo "lcov=$FOUND" >> "$GITHUB_OUTPUT"
-          if [ -n "$FOUND" ]; then
-            echo "✅ LCOV voor reporter: $FOUND"
-          else
-            echo "⚠️ Geen LCOV gevonden; reporter wordt overgeslagen."
-          fi
+          echo "Geen LCOV beschikbaar."
+          echo "lcov=" >> "$GITHUB_OUTPUT"
 
-      # 8) Coverage-rapport in de run-samenvatting
+      # 7) Mooie tabel in de Summary (als LCOV er is)
       - name: Better Test Reports Action
-        if: ${{ steps.findcov.outputs.lcov != '' }}
+        if: ${{ steps.ensure_lcov.outputs.lcov != '' }}
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          coverage-file: ${{ steps.findcov.outputs.lcov }}
-          upload-coverage-report: true
           working-directory: backend
+          coverage-file: ${{ steps.ensure_lcov.outputs.lcov }}
+          upload-coverage-report: true
 
-      # 9) Upload HTML coverage (als aanwezig)
+      # 8) HTML coverage als artifact (indien aanwezig)
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
