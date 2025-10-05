@@ -1,4 +1,5 @@
-name: Frontend
+name: Backend
+
 on:
   push:
     branches: [ main ]
@@ -8,17 +9,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Alle npm/ng commands in de frontend-map uitvoeren
+    # Alle npm/ng commands in de frontend-map
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      # 1) Code naar de runner
+      # 1) Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node/NPM klaarzetten (cache via lockfile)
+      # 2) Node/NPM
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
@@ -30,11 +31,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (Angular)
+      # 4) Build
       - name: Build the code
         run: npx ng build --configuration production
 
-      # 5) Tests + coverage (laat CI doorlopen, geen app-wijzigingen nodig)
+      # 5) Tests + coverage (laat de job doorgaan ook als tests falen)
       - name: Test the code (unit tests + coverage)
         run: |
           sudo apt-get update
@@ -51,30 +52,18 @@ jobs:
           xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless || true
         continue-on-error: true
 
-      # 6) Zorg dat er altijd een coverage-bestand is zodat de reporter kan draaien
-      - name: Ensure coverage file exists
+      # 6) Normaliseer het pad naar één bestand (de action verwacht geen glob)
+      - name: Locate/normalize lcov path
         if: always()
         run: |
           mkdir -p frontend/coverage
-          if ! compgen -G "frontend/coverage/**/lcov.info" > /dev/null; then
-            echo -e "TN:\nSF:dummy.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record" > frontend/coverage/lcov.info
-            echo "Created dummy coverage at frontend/coverage/lcov.info"
-          fi
-
-      # 7) Mooie coverage summary in de Actions run (Better Test Reports)
-      - name: Better Test Report Summary
-        if: always()
-        uses: mridang/action-test-reporter@v1.5.0
-        with:
-          name: Frontend Coverage Report
-          path: frontend/coverage/**/lcov.info
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # 8) (Optioneel) Volledige HTML coverage uploaden
-      - name: Upload coverage HTML
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: frontend/coverage/**
-          if-no-files-found: ignore
+          # Zoek een lcov.info (Angular zet die typisch in coverage/<project>/lcov.info)
+          FOUND=$(ls -1 frontend/coverage/*/lcov.info 2>/dev/null | head -n 1 || true)
+          if [ -n "$FOUND" ]; then
+            cp "$FOUND" frontend/coverage/lcov.info
+            echo "Using $FOUND -> frontend/coverage/lcov.info"
+          elif [ -f frontend/coverage/lcov.info ]; then
+            echo "Using existing frontend/coverage/lcov.info"
+          else
+            # fallback dummy zodat de reporter nooit crasht
+            echo -e "
