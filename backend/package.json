@@ -1,11 +1,10 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "jest",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "jest --coverage --runInBand --passWithNoTests"
   },
   "author": "Dries Swinnen",
   "license": "ISC",
@@ -15,11 +14,23 @@
     "express": "^4.17.3",
     "mongoose": "^6.2.5"
   },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
   "jest": {
     "testEnvironment": "node",
-    "coverageDirectory": "coverage",
     "collectCoverage": true,
+    "coverageDirectory": "coverage",
     "coverageReporters": ["lcov", "text-summary"],
-    "testMatch": ["**/__tests__/**/*.js?(x)", "**/?(*.)+(spec|test).js?(x)"]
+    "collectCoverageFrom": [
+      "**/*.js",
+      "!**/node_modules/**",
+      "!**/coverage/**"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.js?(x)",
+      "**/?(*.)+(spec|test).js?(x)"
+    ],
+    "passWithNoTests": true
   }
 }
