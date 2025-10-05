@@ -66,4 +66,25 @@ jobs:
             echo "Using existing frontend/coverage/lcov.info"
           else
             # fallback dummy zodat de reporter nooit crasht
-            echo -e "
+            echo -e "TN:\nSF:dummy.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record" > frontend/coverage/lcov.info
+            echo "Created dummy frontend/coverage/lcov.info"
+          fi
+
+      # 7) Better Test Reports Action (v1.3.0) — verschijnt in de Run Summary
+      - name: Better Test Reports Action
+        if: always()
+        uses: mridang/action-test-reporter@v1.3.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: frontend
+          coverage-file: frontend/coverage/lcov.info
+          upload-coverage-report: true
+
+      # 8) (optioneel) HTML coverage uploaden (als aanwezig)
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: frontend/coverage/**
+          if-no-files-found: ignore
