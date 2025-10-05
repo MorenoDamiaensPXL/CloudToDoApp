@@ -1,47 +1,36 @@
-name: Frontend
+name: Frontend CI
+
 on:
   push:
     branches: [ main ]
-  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    # Alle npm/ng commands in de frontend-map
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      # 1) Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node/NPM
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          node-version: 18
 
-      # 3) Dependencies
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build
       - name: Build the code
-        run: npx ng build --configuration production
+        run: npm run build --if-present
 
-      # 5) Tests + coverage (keep going even if tests fail)
-      - name: Test the code (unit tests + coverage)
-        working-directory: frontend
+      # ✅ Testen + coverage
+      - name: Run unit tests with coverage
         run: |
-          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb
-          # CI-friendly Chrome wrapper
           cat << 'SH' > /tmp/chrome-no-sandbox.sh
           #!/usr/bin/env bash
           BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
@@ -49,52 +38,23 @@ jobs:
           SH
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
+          xvfb-run -a npx ng test --browsers=ChromeHeadless --code-coverage --watch=false || true
+          echo "Coverage files generated:"
+          find ./coverage -type f -name "lcov.info" || true
 
-          # Run tests with coverage
-          xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless || true
-
-          echo "==== After tests: where are coverage files (relative to frontend/)? ===="
-          pwd
-          ls -la || true
-          ls -la coverage || true
-          find . -maxdepth 6 -type f -name 'lcov.info' -print || true
-        continue-on-error: true
-
-      # 6) Find lcov.info anywhere in the workspace and pass it to the reporter
-      - name: Locate lcov.info in workspace
-        id: lcov
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "WORKSPACE: $GITHUB_WORKSPACE"
-          # Search the whole workspace to avoid path assumptions
-          FOUND="$(find "$GITHUB_WORKSPACE" -type f -name 'lcov.info' -maxdepth 8 | head -n 1 || true)"
-          if [ -n "${FOUND:-}" ]; then
-            echo "Found lcov at: $FOUND"
-            # Make a repo-root-relative path for the action input
-            REL="${FOUND#${GITHUB_WORKSPACE}/}"
-            echo "lcov=$REL" >> "$GITHUB_OUTPUT"
-          else
-            echo "No lcov.info found anywhere."
-            echo "lcov=" >> "$GITHUB_OUTPUT"
-          fi
-
-      # 7) Better Test Reports Action (only if we actually found a coverage file)
+      # ✅ Rapportage
       - name: Better Test Reports Action
-        if: ${{ steps.lcov.outputs.lcov != '' }}
+        if: always()
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          coverage-file: ${{ steps.lcov.outputs.lcov }}
+          coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
 
-      # 8) Upload whatever coverage HTML exists (optional)
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: |
-            frontend/coverage/**
-            **/coverage/**
+          path: frontend/coverage/
           if-no-files-found: ignore
