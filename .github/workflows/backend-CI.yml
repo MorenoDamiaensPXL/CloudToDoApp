@@ -2,7 +2,7 @@ name: Backend
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   build:
@@ -17,8 +17,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Node
-      - name: Setup Node.js
+      # 2) Node.js
+      - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
           node-version: 18
@@ -29,15 +29,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (mag ontbreken)
+      # 4) Build (mag falen)
       - name: Build the code
         run: npm run build || true
 
-      # 5) Tests + coverage (forceer via nyc, ongeacht testrunner)
+      # 5) Tests + coverage -> forceer LCOV + HTML via nyc
       - name: Run unit tests with coverage
         run: |
           set -euxo pipefail
-          # Forceer LCOV + HTML in ./coverage, ook wanneer files niet direct geïmporteerd worden
           npx nyc@15.1.0 \
             --all \
             --reporter=lcov \
@@ -47,58 +46,58 @@ jobs:
             --extension .js \
             npm test || true
 
-          echo "== Coverage bestanden =="
-          find . -maxdepth 6 -type f \( -name lcov.info -o -name coverage-final.json -o -name index.html \) -print || true
+          echo "== After tests, list coverage files =="
+          find coverage -type f -maxdepth 6 -print || true
 
-      # 6) Normaliseer naar backend/coverage/lcov.info
-      - name: Ensure LCOV exists
-        id: ensure_lcov
+      # 6) Normaliseer naar coverage/lcov.info (fallback vanuit coverage-final.json)
+      - name: Normalize coverage to LCOV (coverage/lcov.info)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-
-          # 1) rechtstreekse output
-          if [ -s coverage/lcov.info ]; then
-            echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # 2) ergens dieper? (sommige runners nestelen het)
-          LFOUND="$(ls -1 coverage/**/lcov.info 2>/dev/null | head -n1 || true)"
-          if [ -n "$LFOUND" ] && [ -s "$LFOUND" ]; then
-            mkdir -p coverage
-            cp "$LFOUND" coverage/lcov.info
-            echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # 3) JSON -> LCOV conversie als laatste redmiddel
-          JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
-          if [ -n "${JSON:-}" ]; then
-            COVDIR="$(dirname "$JSON")"
-            npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
-            if [ -s "$COVDIR/lcov.info" ]; then
-              mkdir -p coverage
-              cp "$COVDIR/lcov.info" coverage/lcov.info
-              echo "lcov=coverage/lcov.info" >> "$GITHUB_OUTPUT"
-              exit 0
+          mkdir -p coverage
+          if [ -f coverage/lcov.info ] && [ -s coverage/lcov.info ]; then
+            echo "✅ LCOV present at coverage/lcov.info"
+          else
+            JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
+            if [ -n "${JSON:-}" ]; then
+              COVDIR="$(dirname "$JSON")"
+              echo "Generating LCOV via nyc from: $JSON"
+              npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
+              [ -f "$COVDIR/lcov.info" ] && cp "$COVDIR/lcov.info" coverage/lcov.info || true
             fi
           fi
 
-          echo "Geen LCOV beschikbaar."
-          echo "lcov=" >> "$GITHUB_OUTPUT"
+      # 7) Zelfde truc als frontend: paden ‘flattenen’ zodat er geen folder-rijen verschijnen
+      - name: Flatten LCOV paths (remove directories, keep all metrics)
+        if: always()
+        run: |
+          if [ -s coverage/lcov.info ]; then
+            awk '
+              /^SF:/ {
+                n = split($0, a, /[\/\\]/);
+                print "SF:" a[n];
+                next
+              }
+              { print }
+            ' coverage/lcov.info > coverage/lcov.flattened
+            mv coverage/lcov.flattened coverage/lcov.info
+            echo "✅ Flattened paths in LCOV; directories zullen niet meer gegroepeerd worden."
+          else
+            echo "⚠️ No LCOV to flatten."
+          fi
 
-      # 7) Mooie tabel in job Summary (zelfde als frontend)
+      # 8) Mooie summary tabel (zelfde action als frontend)
       - name: Better Test Reports Action
-        if: ${{ steps.ensure_lcov.outputs.lcov != '' }}
+        if: ${{ always() && hashFiles('backend/coverage/lcov.info') != '' }}
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: backend
-          coverage-file: ${{ steps.ensure_lcov.outputs.lcov }}
+          coverage-file: backend/coverage/lcov.info   # pad t.o.v. repo-root!
           upload-coverage-report: true
+          working-directory: backend
 
-      # 8) HTML coverage als artifact
+      # 9) HTML coverage uploaden als artifact
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
