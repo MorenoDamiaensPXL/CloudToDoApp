@@ -34,12 +34,14 @@ jobs:
       - name: Build the code
         run: npx ng build --configuration production
 
-      # 5) Tests + coverage (laat doorlopen bij failures)
+      # 5) Tests + coverage (keep going even if tests fail)
       - name: Test the code (unit tests + coverage)
+        working-directory: frontend
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb
-          # CI-vriendelijke Chrome wrapper (no sandbox)
+          # CI-friendly Chrome wrapper
           cat << 'SH' > /tmp/chrome-no-sandbox.sh
           #!/usr/bin/env bash
           BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
@@ -48,41 +50,45 @@ jobs:
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
 
+          # Run tests with coverage
           xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless || true
+
+          echo "==== After tests: where are coverage files (relative to frontend/)? ===="
+          pwd
+          ls -la || true
+          ls -la coverage || true
+          find . -maxdepth 6 -type f -name 'lcov.info' -print || true
         continue-on-error: true
 
-       # 6) Vind het échte lcov.info (ongeacht waar karma het neerzet)
-      - name: Find lcov.info
+      # 6) Find lcov.info anywhere in the workspace and pass it to the reporter
+      - name: Locate lcov.info in workspace
         id: lcov
-        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          echo "PWD=$(pwd)"
-          # We zitten in working-directory: frontend (via defaults.run)
-          # Zoek maximaal 4 niveaus diep zodat alle gangbare paden meedoen.
-          FOUND="$(find . -type f -name lcov.info -maxdepth 4 | head -n 1 || true)"
+          echo "WORKSPACE: $GITHUB_WORKSPACE"
+          # Search the whole workspace to avoid path assumptions
+          FOUND="$(find "$GITHUB_WORKSPACE" -type f -name 'lcov.info' -maxdepth 8 | head -n 1 || true)"
           if [ -n "${FOUND:-}" ]; then
-            # strip de leading "./" zodat het pad netjes is voor de action input
-            FOUND="${FOUND#./}"
-            echo "Gevonden coverage-bestand: $FOUND"
-            echo "lcov=$FOUND" >> "$GITHUB_OUTPUT"
+            echo "Found lcov at: $FOUND"
+            # Make a repo-root-relative path for the action input
+            REL="${FOUND#${GITHUB_WORKSPACE}/}"
+            echo "lcov=$REL" >> "$GITHUB_OUTPUT"
           else
-            echo "Geen lcov.info gevonden."
+            echo "No lcov.info found anywhere."
             echo "lcov=" >> "$GITHUB_OUTPUT"
           fi
 
-      # 7) Better Test Reports Action (alleen draaien als we een pad hebben)
+      # 7) Better Test Reports Action (only if we actually found a coverage file)
       - name: Better Test Reports Action
-        if: ${{ always() && steps.lcov.outputs.lcov != '' }}
+        if: ${{ steps.lcov.outputs.lcov != '' }}
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: frontend              # inputs zijn t.o.v. repo-root; met working-directory kan je pad korter blijven
           coverage-file: ${{ steps.lcov.outputs.lcov }}
           upload-coverage-report: true
 
-      # 8) (optioneel) HTML coverage uploaden – zoek breed zodat we niets missen
+      # 8) Upload whatever coverage HTML exists (optional)
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
@@ -90,5 +96,5 @@ jobs:
           name: coverage-report
           path: |
             frontend/coverage/**
-            frontend/**/coverage/**
+            **/coverage/**
           if-no-files-found: ignore
