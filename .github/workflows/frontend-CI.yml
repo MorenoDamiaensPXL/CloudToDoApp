@@ -9,41 +9,37 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: frontend   # 👈 alle run-commando’s uitvoeren in ./frontend
+
     steps:
-      # 1) Check out de code op de runner
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) Node/NPM klaarzetten (juiste versie voor Angular-projecten)
-      #    Pas '18' aan naar wat je project vereist (bv. 20) indien nodig.
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json  # 👈 correcte cache-path
 
-      # 3) Dependencies installeren (geeft je de project-lokale Angular CLI)
       - name: Install dependencies
         run: npm ci
 
-      # 4) Build (via de *project-lokale* Angular CLI met npx)
       - name: Build the code
         run: npx ng build --configuration production
 
-      # 5) Unit tests met coverage
-      #    Veel Angular-projecten gebruiken Karma + ChromeHeadless.
-      #    xvfb-run zorgt dat headless Chrome netjes kan draaien op de CI-runner.
       - name: Test the code (unit tests + coverage)
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
           xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless
 
-      # 6) Coverage samenvatting in de run-overview (Job Summary)
       - name: Generate coverage summary
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
-          filename: coverage/**/lcov.info
+          filename: frontend/coverage/**/lcov.info  # 👈 let op het pad
           badge: true
           fail_below_min: false
           format: markdown
@@ -51,9 +47,8 @@ jobs:
           output: both
           thresholds: '60 80'
 
-      # 7) Volledige HTML coverage uploaden als artifact (te downloaden)
       - name: Upload coverage HTML
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage/**
+          path: frontend/coverage/**
