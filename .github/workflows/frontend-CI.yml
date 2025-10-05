@@ -53,44 +53,68 @@ jobs:
           find . -maxdepth 5 -type d -name 'coverage' -print || true
           find . -maxdepth 6 -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -print || true
 
-      # 6️⃣ Maak lcov.info aan als het ontbreekt (zet om van JSON)
-      - name: Ensure lcov.info exists (convert if needed)
+      - name: Inspect raw coverage tree (debug)
+        if: always()
+        working-directory: frontend
+        run: |
+          echo "PWD=$(pwd)"
+          echo "---- coverage (recursive) ----"
+          ls -la || true
+          [ -d coverage ] && ls -la coverage || true
+          [ -d coverage ] && find coverage -type f -maxdepth 6 -print || true
+
+      # Verzamel/normaliseer LCOV: pak bestaande lcov.info OF maak 'm uit coverage-final.json
+      - name: Normalize coverage to frontend/coverage/lcov.info
+        if: always()
+        working-directory: frontend
         shell: bash
         run: |
           set -euo pipefail
-          if find . -maxdepth 6 -type f -name 'lcov.info' | grep -q . ; then
-            echo "✅ lcov.info already present."
-            exit 0
-          fi
 
-          JSON="$(find . -maxdepth 6 -type f -name 'coverage-final.json' | head -n 1 || true)"
-          if [ -n "${JSON:-}" ]; then
-            COVDIR="$(dirname "$JSON")"
-            echo "📄 Found coverage-final.json in $COVDIR — generating lcov.info with nyc"
-            npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
-            ls -la "$COVDIR"
+          mkdir -p coverage
+
+          # a) Bestaat er ergens al een lcov.info? -> kopieer naar vaste plek
+          EXISTING="$(find . -path ./node_modules -prune -o -type f -name 'lcov.info' -print | head -n1 || true)"
+          if [ -n "${EXISTING:-}" ]; then
+            echo "Found existing LCOV at: $EXISTING"
+            cp "$EXISTING" coverage/lcov.info
           else
-            echo "⚠️ No coverage-final.json found; creating dummy lcov.info"
-            mkdir -p coverage
-            echo -e "TN:\nSF:dummy.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record" > coverage/lcov.info
+            # b) Geen lcov.info? Probeer uit Istanbul JSON te genereren
+            JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
+            if [ -n "${JSON:-}" ]; then
+              COVDIR="$(dirname "$JSON")"
+              echo "Generating LCOV from $JSON"
+              npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
+              # kopieer naar vaste plek
+              if [ -f "$COVDIR/lcov.info" ]; then
+                cp "$COVDIR/lcov.info" coverage/lcov.info
+              fi
+            fi
           fi
 
-      # 7️⃣ Genereer mooi overzicht via Better Test Reports
+          # c) Als er NOG steeds niets is, laat dat duidelijk zien
+          if [ -f coverage/lcov.info ]; then
+            echo "✅ Normalized LCOV at coverage/lcov.info"
+          else
+            echo "❌ No LCOV produced (tests ran, but no file was emitted)."
+          fi
+
+      # Rapport: alleen draaien als we nu echt een LCOV hebben
       - name: Better Test Reports Action
-        if: always()
+        if: ${{ always() && hashFiles('frontend/coverage/lcov.info') != '' }}
         uses: mridang/action-test-reporter@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
 
-      # 8️⃣ Upload HTML-coverage (optioneel artefact)
+      # HTML coverage uploaden (als aanwezig)
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: |
-            frontend/**/coverage/**
             frontend/coverage/**
+            frontend/**/coverage/**
           if-no-files-found: ignore
