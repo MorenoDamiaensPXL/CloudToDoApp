@@ -17,9 +17,11 @@ jobs:
         working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node (Angular 12 ↔ Node 18)
+        uses: actions/setup-node@v4
         with:
           node-version: "18"
           cache: "npm"
@@ -35,12 +37,28 @@ jobs:
       - name: Build Angular app
         run: npx ng build --configuration production
 
-      - name: Run unit tests with coverage
+      # Maak tijdelijk een CI-variant van de Karma-config met no-sandbox flags
+      - name: Patch Karma config for GitHub Actions
+        run: |
+          echo "module.exports = function (config) {
+            require('./karma.conf.js')(config);
+            config.set({
+              browsers: ['ChromeHeadlessNoSandbox'],
+              customLaunchers: {
+                ChromeHeadlessNoSandbox: {
+                  base: 'ChromeHeadless',
+                  flags: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+                }
+              }
+            });
+          };" > karma.conf.ci.js
+
+      - name: Run unit tests with coverage (no sandbox)
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         run: |
-          npm test -- --watch=false --browsers=ChromeHeadless --code-coverage
-          echo "Found coverage files:"
+          npx karma start karma.conf.ci.js --single-run
+          echo "Coverage files under frontend/coverage:"
           ls -R coverage || true
 
       - name: Coverage summary (Job Summary)
@@ -60,3 +78,17 @@ jobs:
           working-directory: frontend
           coverage-file: frontend/coverage/**/lcov.info
           upload-coverage-report: true
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          if-no-files-found: ignore
+
+      - name: Upload production build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: warn
