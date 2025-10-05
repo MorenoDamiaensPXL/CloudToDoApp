@@ -37,4 +37,4 @@ jobs:
       - name: Verify build output
         run: |
           echo "Build directory structure:"
-          ls -alhR dist || ls -alhR build || echo "⚠️ No dist/build folder found."
+          ls -alhR dist || ls -alhR build || echo "⚠️ No dist/build folder found!"
