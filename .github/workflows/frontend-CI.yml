@@ -1,0 +1,17 @@
+name: Frontend
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-CI.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+
+jobs:
+  checkout-only:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
