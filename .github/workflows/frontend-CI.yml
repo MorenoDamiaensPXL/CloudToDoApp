@@ -1,8 +1,12 @@
-name: Frontend
+name: Frontend CI
 
 on:
   push:
-    branches: [ main ]
+    paths:
+      - "frontend/**"
+  pull_request:
+    paths:
+      - "frontend/**"
 
 jobs:
   build:
@@ -13,11 +17,11 @@ jobs:
         working-directory: frontend
 
     steps:
-      # 1️⃣ Checkout de code (vereist voor elke workflow)
+      # 1) Code ophalen
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node.js (gebruik juiste versie)
+      # 2) Node.js klaarzetten (npm cache op frontend/packge-lock.json)
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
@@ -25,20 +29,44 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # 3️⃣ Dependencies installeren
+      # 3) Dependencies installeren
       - name: Install dependencies
         run: npm ci
 
-      # 4️⃣ Build uitvoeren (zoals het lab voorschrijft)
+      # 4) Build (mag falen, de focus is CI + tests)
       - name: Build the code
         run: npx ng build --configuration production || true
 
-      # 5️⃣ Tests uitvoeren + coverage genereren
-      - name: Test the code (unit tests + coverage)
+      # 5) Maak een CI-karma-config die altijd LCOV + HTML schrijft
+      - name: Create CI Karma config (forces LCOV + HTML)
+        run: |
+          cat > karma.ci.conf.js <<'JS'
+          const path = require('path');
+          module.exports = function (config) {
+            // Laad de bestaande karma.conf.js
+            require('./karma.conf.js')(config);
+            // Forceer coverage-reporters naar vaste plek
+            config.set({
+              reporters: ['progress', 'coverage'],
+              coverageReporter: {
+                dir: path.join(__dirname, 'coverage'),   // => frontend/coverage/
+                reporters: [
+                  { type: 'lcovonly', subdir: '.' },     // => frontend/coverage/lcov.info
+                  { type: 'html',     subdir: 'html' }   // => frontend/coverage/html/
+                ],
+                fixWebpackSourcePaths: true
+              }
+            });
+          };
+          JS
+
+      # 6) Tests draaien (headless Chrome zonder sandbox) + coverage
+      - name: Run unit tests with CI Karma config (write LCOV)
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb
+          # Chrome wrapper zonder sandbox
           cat << 'SH' > /tmp/chrome-no-sandbox.sh
           #!/usr/bin/env bash
           BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
@@ -47,75 +75,57 @@ jobs:
           chmod +x /tmp/chrome-no-sandbox.sh
           export CHROME_BIN=/tmp/chrome-no-sandbox.sh
 
-          xvfb-run -a npx ng test --watch=false --code-coverage --browsers=ChromeHeadless || true
+          # Belangrijk: gebruik de CI-config; laat job doorlopen bij fails
+          xvfb-run -a npx ng test --watch=false --browsers=ChromeHeadless --code-coverage --karma-config=karma.ci.conf.js || true
 
-          echo "== Dump coverage tree =="
-          find . -maxdepth 5 -type d -name 'coverage' -print || true
-          find . -maxdepth 6 -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -print || true
+          echo "== After tests, list coverage files =="
+          find coverage -type f -maxdepth 6 -print || true
 
-      - name: Inspect raw coverage tree (debug)
+      # 7) Normaliseer naar één pad (frontend/coverage/lcov.info).
+      #    Als karma alleen coverage-final.json schrijft, converteer naar lcov met nyc.
+      - name: Normalize coverage to LCOV (frontend/coverage/lcov.info)
         if: always()
-        working-directory: frontend
-        run: |
-          echo "PWD=$(pwd)"
-          echo "---- coverage (recursive) ----"
-          ls -la || true
-          [ -d coverage ] && ls -la coverage || true
-          [ -d coverage ] && find coverage -type f -maxdepth 6 -print || true
-
-     # 1) Inspect – laat in logs zien waar coverage staat
-      - name: Inspect raw coverage tree
-        if: always()
-        working-directory: frontend
-        run: |
-          echo "PWD=$(pwd)"
-          find . -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -maxdepth 8 -print || true
-      
-      # 2) Normaliseer naar één pad: frontend/coverage/lcov.info
-      - name: Normalize coverage to LCOV
-        if: always()
-        working-directory: frontend
         shell: bash
         run: |
           set -euo pipefail
+          cd frontend
           mkdir -p coverage
-      
-          # a) al aanwezige lcov.info?
-          EXISTING="$(find . -path ./node_modules -prune -o -type f -name 'lcov.info' -print | head -n1 || true)"
-          if [ -n "${EXISTING:-}" ]; then
-            echo "Found LCOV at: $EXISTING"
-            cp "$EXISTING" coverage/lcov.info
+          if [ -f coverage/lcov.info ] && [ -s coverage/lcov.info ]; then
+            echo "✅ LCOV present at coverage/lcov.info"
           else
-            # b) geen lcov? probeer uit Istanbul JSON te genereren
             JSON="$(find . -path ./node_modules -prune -o -type f -name 'coverage-final.json' -print | head -n1 || true)"
             if [ -n "${JSON:-}" ]; then
               COVDIR="$(dirname "$JSON")"
-              echo "Generating LCOV from: $JSON"
+              echo "Generating LCOV via nyc from: $JSON"
               npx nyc@15.1.0 report --reporter=lcov -t "$COVDIR" --report-dir "$COVDIR"
               [ -f "$COVDIR/lcov.info" ] && cp "$COVDIR/lcov.info" coverage/lcov.info || true
             fi
+            if [ -f coverage/lcov.info ] && [ -s coverage/lcov.info ]; then
+              echo "✅ Normalized LCOV at coverage/lcov.info"
+            else
+              echo "❌ Still no usable LCOV."
+            fi
           fi
-      
-          if [ -f coverage/lcov.info ]; then
-            echo "✅ LCOV ready at frontend/coverage/lcov.info"
-            wc -l coverage/lcov.info || true
-            head -n 20 coverage/lcov.info || true
-          else
-            echo "❌ No LCOV produced."
-          fi
-      
-      # 3) Hard check – faal de reporter bij leeg/bestaand-niet LCOV
+
+      # 8) (Optioneel) Toon waar coverage staat voor debug
+      - name: Inspect raw coverage tree
+        if: always()
+        run: |
+          echo "PWD=$(pwd)"
+          find . -type f \( -name 'lcov.info' -o -name 'coverage-final.json' \) -maxdepth 8 -print || true
+
+      # 9) Verifieer dat LCOV bruikbaar is (niet leeg). Zo ja, maak het rapport.
       - name: Verify LCOV exists and is non-empty
         if: always()
-        working-directory: frontend
         shell: bash
         run: |
-          if [ ! -s coverage/lcov.info ]; then
-            echo "No usable LCOV (missing or empty)."
-            exit 0  # laat job doorlopen; reporter wordt overgeslagen
+          if [ ! -s frontend/coverage/lcov.info ]; then
+            echo "No usable LCOV (missing or empty). Reporter will be skipped."
+            exit 0
           fi
-      
-      # 4) Reporter – krijgt exact dit bestand
+          echo "LCOV OK: $(wc -l frontend/coverage/lcov.info | awk '{print $1}') lines"
+
+      # 10) Better Test Reports (mooie tabel in de run summary)
       - name: Better Test Reports Action
         if: ${{ always() && hashFiles('frontend/coverage/lcov.info') != '' }}
         uses: mridang/action-test-reporter@v1.3.0
@@ -123,3 +133,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           coverage-file: frontend/coverage/lcov.info
           upload-coverage-report: true
+
+      # 11) HTML coverage uploaden als artefact (open lokaal index.html)
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            frontend/coverage/**
+            frontend/**/coverage/**
+          if-no-files-found: ignore
