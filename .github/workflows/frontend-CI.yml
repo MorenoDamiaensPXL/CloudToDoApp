@@ -30,19 +30,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Chromium for headless tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: Setup Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
 
       - name: Build
         run: npx ng build --configuration production
 
       - name: Test (with coverage)
         env:
-          CHROME_BIN: /usr/bin/chromium || /usr/bin/chromium-browser
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           npm test -- --watch=false --browsers=ChromeHeadless --code-coverage || true
 
