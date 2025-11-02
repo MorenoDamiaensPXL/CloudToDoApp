@@ -1,10 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# -------- Config van Terraform (templatefile) --------
-DOCKER_NS_RAW="$${DOCKER_NS:-}"
-FRONTEND_DIGEST="$${FRONTEND_DIGEST:-}"
+# Waardes uit Terraform (worden hier als *literal strings* ingevuld)
+DOCKER_NS_RAW="${DOCKER_NS}"
+FRONTEND_DIGEST="${FRONTEND_DIGEST}"
 
+# Forceer lowercase namespace in bash
 DOCKER_NS="$(echo "$${DOCKER_NS_RAW}" | tr '[:upper:]' '[:lower:]')"
 
 apt-get update -y
