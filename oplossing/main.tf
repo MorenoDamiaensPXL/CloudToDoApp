@@ -3,7 +3,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.60"
+      version = "~> 6.16"
     }
   }
   # (Aanrader) Remote state via S3 + DynamoDB; laat weg als je nog geen backend hebt
