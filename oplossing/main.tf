@@ -6,14 +6,8 @@ terraform {
       version = "~> 6.16"
     }
   }
-  # (Aanrader) Remote state via S3 + DynamoDB; laat weg als je nog geen backend hebt
-  # backend "s3" {
-  #   bucket         = "tf-state-todo-prod"
-  #   key            = "oplossing/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "tf-state-locks"
-  #   encrypt        = true
-  # }
+  # Optioneel: remote state backend hier configureren
+  # backend "s3" { ... }
 }
 
 provider "aws" {
@@ -107,13 +101,11 @@ resource "aws_instance" "frontend" {
   key_name               = var.key_name
 
   user_data = templatefile("${path.module}/userdata-frontend.sh", {
-    DOCKER_NS      = var.docker_ns
-    FRONTEND_DIGEST= var.frontend_digest
+    DOCKER_NS       = var.docker_ns
+    FRONTEND_DIGEST = var.frontend_digest
   })
 
-  # Belangrijk voor immutable updates
   user_data_replace_on_change = true
-
   tags = { Name = "frontend-ec2" }
 }
 
@@ -125,15 +117,14 @@ resource "aws_instance" "backend" {
   key_name               = var.key_name
 
   user_data = templatefile("${path.module}/userdata-backend.sh", {
-    DOCKER_NS     = var.docker_ns
-    BACKEND_DIGEST= var.backend_digest
+    DOCKER_NS       = var.docker_ns
+    BACKEND_DIGEST  = var.backend_digest
     # Gebruik digest indien opgegeven, anders fallback tag (minder immutable)
-    MONGO_REF     = var.mongo_digest != "" ? "docker.io/library/mongo@${var.mongo_digest}" : "docker.io/library/mongo:7.0.14"
-    DBURL         = "mongodb://root:password@mongodb:27017/sampledb?authSource=admin"
+    MONGO_REF       = var.mongo_digest != "" ? "docker.io/library/mongo@${var.mongo_digest}" : "docker.io/library/mongo:7.0.14"
+    DBURL           = "mongodb://root:password@mongodb:27017/sampledb?authSource=admin"
   })
 
   user_data_replace_on_change = true
-
   tags = { Name = "backend-ec2" }
 }
 
@@ -184,18 +175,14 @@ resource "aws_apigatewayv2_route" "todo_route" {
   target    = "integrations/${aws_apigatewayv2_integration.todo_integration.id}"
 }
 
-# Expliciete deployment + stage (immutable)
 resource "aws_apigatewayv2_deployment" "todo_deploy" {
   api_id = aws_apigatewayv2_api.todo_api.id
-
-  # Force nieuwe deployment zodra integratie/route wijzigt
   triggers = {
     config = sha1(jsonencode({
       integration = aws_apigatewayv2_integration.todo_integration.id
       route       = aws_apigatewayv2_route.todo_route.route_key
     }))
   }
-
   depends_on = [aws_apigatewayv2_route.todo_route]
 }
 
