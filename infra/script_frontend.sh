@@ -10,14 +10,25 @@ echo "=== Starting frontend deployment at $(date) ==="
 apt-get update -y
 apt-get install -y docker.io
 systemctl enable --now docker
-usermod -aG docker ubuntu
+usermod -aG docker ubuntu || true
 
-# Build frontend with PUBLIC backend URL
+# Backend URL van de backend instance (ingevuld door Terraform)
 BACKEND_URL="http://${backend_ip}:8080"
-docker pull 12301302/cloud2_frontend:latest
-docker run -d --name frontend --restart=unless-stopped -p 80:80 \
+
+# Exact immutable image (ingevuld door Terraform via templatefile)
+FRONTEND_IMAGE="${frontend_image}"
+
+echo "Pulling frontend image: $FRONTEND_IMAGE"
+docker pull "$FRONTEND_IMAGE"
+
+# (Idempotent) remove oude container als die er is
+docker rm -f frontend >/dev/null 2>&1 || true
+
+echo "Starting frontend (API_URL=$BACKEND_URL)..."
+docker run -d --name frontend --restart=unless-stopped \
+  -p 80:80 \
   -e API_URL="$BACKEND_URL" \
-  12301302/cloud2_frontend:latest
+  "$FRONTEND_IMAGE"
 
 echo "Frontend is running on port 80"
 echo "Frontend configured to connect to: $BACKEND_URL"

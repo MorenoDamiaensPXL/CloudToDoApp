@@ -5,16 +5,15 @@ terraform {
   required_version = ">=1.4.0"
 }
 
-# Provider gebruikt regio uit env (AWS_REGION / AWS_DEFAULT_REGION)
+# Provider neemt regio uit env (AWS_REGION / AWS_DEFAULT_REGION)
 provider "aws" {}
 
-# --- Infra: zorg voor (default) VPC + subnet zodat EC2 kan starten ---
-# Maakt/claimt de default VPC
+# --- Zorg dat er subnets zijn (default VPC kan soms zonder default subnets zijn) ---
 resource "aws_default_vpc" "default" {}
 
-# Pak de eerste beschikbare AZ en maak/claim daar het default subnet
 data "aws_availability_zones" "available" {}
 
+# Eén default subnet is genoeg voor deze setup (je kunt er later meer toevoegen)
 resource "aws_default_subnet" "primary" {
   availability_zone = data.aws_availability_zones.available.names[0]
 }
@@ -32,7 +31,7 @@ resource "aws_security_group" "sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Backend API (publiek open zoals in jouw oorspronkelijke config)
+  # Backend API (publiek open om jouw huidige gedrag te matchen)
   ingress {
     from_port   = 8080
     to_port     = 8080
@@ -40,7 +39,7 @@ resource "aws_security_group" "sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # SSH
+  # SSH (overweeg te beperken tot jouw IP)
   ingress {
     from_port   = 22
     to_port     = 22
@@ -66,7 +65,18 @@ resource "aws_instance" "backend" {
   vpc_security_group_ids      = [aws_security_group.sg.id]
   associate_public_ip_address = true
   key_name                    = var.key_name != "" ? var.key_name : null
-  user_data                   = file("${path.module}/script_backend.sh")
+
+  # Injecteer exact te gebruiken backend image (immutable)
+  user_data = templatefile("${path.module}/script_backend.sh", {
+    backend_image = var.backend_image
+  })
+
+  # Maak nieuwe instance wanneer user_data wijzigt (dus bij nieuwe SHA)
+  user_data_replace_on_change = true
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   tags = { Name = "${var.name_prefix}-backend" }
 }
@@ -79,9 +89,17 @@ resource "aws_instance" "frontend" {
   associate_public_ip_address = true
   key_name                    = var.key_name != "" ? var.key_name : null
 
+  # Injecteer backend IP + exacte frontend image (immutable)
   user_data = templatefile("${path.module}/script_frontend.sh", {
-    backend_ip = aws_instance.backend.public_ip
+    backend_ip     = aws_instance.backend.public_ip
+    frontend_image = var.frontend_image
   })
+
+  user_data_replace_on_change = true
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   tags = { Name = "${var.name_prefix}-frontend" }
 }
@@ -90,7 +108,7 @@ resource "aws_instance" "frontend" {
 # Hardcoded Ubuntu AMI ID for us-east-1
 variable "ami_id" {
   type    = string
-  default = "ami-0e2c8caa4b6378d8c" # Ubuntu 22.04 LTS in us-east-1
+  default = "ami-0e2c8caa4b6378d8c" # Ubuntu 22.04 LTS (us-east-1)
 }
 
 variable "instance_type" {
@@ -106,6 +124,17 @@ variable "key_name" {
 variable "name_prefix" {
   type    = string
   default = "todoapp"
+}
+
+# Exact te gebruiken images (door CI gevuld met SHA-tags)
+variable "backend_image" {
+  type        = string
+  description = "Volledige image referentie voor backend, bv. 12301302/cloud2_backend:<sha>"
+}
+
+variable "frontend_image" {
+  type        = string
+  description = "Volledige image referentie voor frontend, bv. 12301302/cloud2_frontend:<sha>"
 }
 
 # --- Outputs ---

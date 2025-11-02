@@ -6,100 +6,122 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+
 env:
-  BACKEND_IMAGE: "dynamoz/cloud2_backend:latest"
-  FRONTEND_IMAGE: "dynamoz/cloud2_frontend:latest"
+  AWS_REGION: us-east-1
+  # Docker Hub namespace/repo (pas evt. aan naar je eigen namespace)
+  BACKEND_IMAGE_NS: dynamoz/cloud2_backend
+  FRONTEND_IMAGE_NS: dynamoz/cloud2_frontend
+  IMAGE_TAG_SHA: ${{ github.sha }}
+
 jobs:
   frontend:
     runs-on: ubuntu-latest
-    env:
-      # Zorgt dat Terraform nooit om input vraagt
-      TF_INPUT: "false"
-      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
-      TF_LOG: "INFO"
-      # Zet regio ook expliciet (naast aws-actions)
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_REGION: us-east-1
-
     steps:
       - uses: actions/checkout@v4
-      - name: docker meta
-        id: meta
+
+      - name: Docker meta (frontend)
+        id: meta_front
         uses: docker/metadata-action@v5
         with:
-            images: ${{env.FRONTEND_IMAGE}}
-      - name: login docker
+          images: ${{ env.FRONTEND_IMAGE_NS }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.IMAGE_TAG_SHA }}
+
+      - name: Login Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: build and push docker image
+
+      - name: Build & Push frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
-          tags: ${{env.FRONTEND_IMAGE}}
-          annotations: ${{ steps.meta.outputs.annotations }}
-  backend:      
-    runs-on: ubuntu-latest
-    env:
-      # Zorgt dat Terraform nooit om input vraagt
-      TF_INPUT: "false"
-      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
-      TF_LOG: "INFO"
-      # Zet regio ook expliciet (naast aws-actions)
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_REGION: us-east-1
+          tags: |
+            ${{ env.FRONTEND_IMAGE_NS }}:latest
+            ${{ env.FRONTEND_IMAGE_NS }}:${{ env.IMAGE_TAG_SHA }}
+          annotations: ${{ steps.meta_front.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
+  backend:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: docker meta
-        id: meta
+
+      - name: Docker meta (backend)
+        id: meta_back
         uses: docker/metadata-action@v5
         with:
-            images: ${{env.BACKEND_IMAGE}}
-      - name: login docker
+          images: ${{ env.BACKEND_IMAGE_NS }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.IMAGE_TAG_SHA }}
+
+      - name: Login Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: build and push docker image
+
+      - name: Build & Push backend
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
-          tags: ${{env.BACKEND_IMAGE}}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          tags: |
+            ${{ env.BACKEND_IMAGE_NS }}:latest
+            ${{ env.BACKEND_IMAGE_NS }}:${{ env.IMAGE_TAG_SHA }}
+          annotations: ${{ steps.meta_back.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   infrastructure:
     runs-on: ubuntu-latest
     needs: [frontend, backend]
     env:
-      # Zorgt dat Terraform nooit om input vraagt
       TF_INPUT: "false"
-      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
       TF_LOG: "INFO"
-      # Zet regio ook expliciet (naast aws-actions)
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_REGION: us-east-1
+      AWS_REGION: ${{ env.AWS_REGION }}   # top-level env blijft werken
 
     steps:
       - uses: actions/checkout@v4
-      - name: login aws infrastructure
+
+      # Compose de immutable image refs als echte env vars voor de rest van de job
+      - name: Compose TF image variables
+        run: |
+          echo "TF_VAR_backend_image=${{ env.BACKEND_IMAGE_NS }}:${{ env.IMAGE_TAG_SHA }}" >> "$GITHUB_ENV"
+          echo "TF_VAR_frontend_image=${{ env.FRONTEND_IMAGE_NS }}:${{ env.IMAGE_TAG_SHA }}" >> "$GITHUB_ENV"
+
+      - name: Debug env
+        run: |
+          echo "AWS_REGION=${{ env.AWS_REGION }}"
+          echo "TF_VAR_backend_image=${{ env.TF_VAR_backend_image }}"
+          echo "TF_VAR_frontend_image=${{ env.TF_VAR_frontend_image }}"
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
-        with: 
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID}}
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-      - name: setup terraform
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-            terraform_version: 1.9.5
-      - name: version
-        run: which terraform && terraform -version
-      - name: initialize project
+          terraform_version: 1.9.5
+
+      - name: Terraform Apply
         working-directory: ./infra
+        env:
+          # nu bestaan ze gegarandeerd als env’s
+          TF_VAR_backend_image:  ${{ env.TF_VAR_backend_image }}
+          TF_VAR_frontend_image: ${{ env.TF_VAR_frontend_image }}
         run: |
           terraform init -input=false
-          terraform plan -input=false
           terraform apply -auto-approve
