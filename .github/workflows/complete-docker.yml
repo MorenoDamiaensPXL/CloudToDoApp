@@ -1,53 +1,141 @@
-name: Docker Example
+name: CI + Docker
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "**" ]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/**"
+      - "frontend/Dockerfile"
+      - "backend/Dockerfile"
+      - "frontend/nginx.conf"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/**"
   workflow_dispatch:
 
-jobs:
-  build-test-and-push:
-    runs-on: ubuntu-latest
+# Voorkom parallelle runs op dezelfde branch
+concurrency:
+  group: ci-docker-${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  contents: read
+
+jobs:
+  # ---------- FRONTEND CI ----------
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---------- FRONTEND: build & tests (optioneel maar aanbevolen) ----------
-      - name: Setup Node.js 16.x
+      - name: Use Node.js 16.x
         uses: actions/setup-node@v4
         with:
           node-version: "16.x"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
 
-      - name: Install frontend deps
-        working-directory: frontend
+      - name: Install deps
         run: npm ci
 
-      - name: Install Angular CLI (global)
+      - name: Install Angular CLI 12 (global)
         run: npm i -g @angular/cli@12
 
-      - name: Setup Chrome (voor headless Karma tests)
+      - name: Setup Chrome (Karma headless)
         uses: browser-actions/setup-chrome@v1
         with:
           install-dependencies: true
 
-      - name: Frontend tests (headless) + coverage
-        working-directory: frontend
+      - name: Build (production)
+        run: npx ng build --configuration production
+
+      - name: Unit tests + coverage (headless)
         env:
           CHROME_BIN: chrome
-        run: npx ng test --watch=false --browsers=ChromeHeadless --code-coverage || echo "Frontend tests skipped (non-fatal)"
+        run: npx ng test --watch=false --browsers=ChromeHeadless --code-coverage
 
-      # ---------- BACKEND: build & tests (optioneel maar aanbevolen) ----------
-      - name: Install backend deps
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: |
+            frontend/coverage/**
+            frontend/coverage/**/lcov.info
+            frontend/coverage/**/cobertura-coverage.xml
+
+      - name: Coverage summary
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: frontend/coverage/**/cobertura-coverage.xml,frontend/coverage/**/lcov.info
+          badge: true
+          format: markdown
+          output: both
+
+  # ---------- BACKEND CI ----------
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 16.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16.x"
+          cache: "npm"
+          cache-dependency-path: "backend/package-lock.json"
+
+      - name: Install deps
         run: npm ci
 
-      - name: Backend tests
-        working-directory: backend
-        run: |
-          npm test -- --coverage || echo "Backend tests skipped (non-fatal)"
+      - name: Build (if present)
+        run: npm run build --if-present
 
-      # ---------- DOCKER: login & buildx ----------
+      - name: Test + coverage
+        run: npm test -- --coverage || npm run test --if-present -- --coverage
+
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage/**
+            backend/coverage/lcov.info
+            backend/coverage/cobertura-coverage.xml
+
+      - name: Coverage summary
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: backend/coverage/**/cobertura-coverage.xml,backend/coverage/**/lcov.info
+          badge: true
+          format: markdown
+          output: both
+
+  # ---------- DOCKER BUILD & PUSH ----------
+  docker:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -57,8 +145,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ---------- FRONTEND IMAGE ----------
-      - name: Build & push frontend image
+      # Frontend image (laat jouw Dockerfile ongewijzigd)
+      - name: Build & push FRONTEND image
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -70,8 +158,8 @@ jobs:
           build-args: |
             APIURL=${{ vars.FRONTEND_APIURL || 'http://localhost:3000' }}
 
-      # ---------- BACKEND IMAGE ----------
-      - name: Build & push backend image
+      # Backend image (laat jouw Dockerfile ongewijzigd)
+      - name: Build & push BACKEND image
         uses: docker/build-push-action@v6
         with:
           context: ./backend

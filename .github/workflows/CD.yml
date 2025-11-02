@@ -1,0 +1,105 @@
+name: deploy
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+env:
+  BACKEND_IMAGE: "12301302/cloud2_backend:latest"
+  FRONTEND_IMAGE: "12301302/cloud2_frontend:latest"
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    env:
+      # Zorgt dat Terraform nooit om input vraagt
+      TF_INPUT: "false"
+      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
+      TF_LOG: "INFO"
+      # Zet regio ook expliciet (naast aws-actions)
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+            images: ${{env.FRONTEND_IMAGE}}
+      - name: login docker
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: build and push docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{env.FRONTEND_IMAGE}}
+          annotations: ${{ steps.meta.outputs.annotations }}
+  backend:      
+    runs-on: ubuntu-latest
+    env:
+      # Zorgt dat Terraform nooit om input vraagt
+      TF_INPUT: "false"
+      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
+      TF_LOG: "INFO"
+      # Zet regio ook expliciet (naast aws-actions)
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+            images: ${{env.BACKEND_IMAGE}}
+      - name: login docker
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: build and push docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{env.BACKEND_IMAGE}}
+          annotations: ${{ steps.meta.outputs.annotations }}
+  infrastructure:
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    env:
+      # Zorgt dat Terraform nooit om input vraagt
+      TF_INPUT: "false"
+      # Optioneel: meer logging (DEBUG/TRACE bij dieper onderzoek)
+      TF_LOG: "INFO"
+      # Zet regio ook expliciet (naast aws-actions)
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: login aws infrastructure
+        uses: aws-actions/configure-aws-credentials@v5
+        with: 
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID}}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: setup terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+            terraform_version: 1.9.5
+      - name: version
+        run: which terraform && terraform -version
+      - name: initialize project
+        working-directory: ./infra
+        run: |
+          terraform init -input=false
+          terraform plan -input=false
+          terraform apply -auto-approve
