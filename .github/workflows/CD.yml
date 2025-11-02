@@ -86,12 +86,11 @@ jobs:
     env:
       TF_INPUT: "false"
       TF_LOG: "INFO"
-      AWS_REGION: ${{ env.AWS_REGION }}   # top-level env blijft werken
+      # géén AWS_REGION hier met een expression!
 
     steps:
       - uses: actions/checkout@v4
 
-      # Compose de immutable image refs als echte env vars voor de rest van de job
       - name: Compose TF image variables
         run: |
           echo "TF_VAR_backend_image=${{ env.BACKEND_IMAGE_NS }}:${{ env.IMAGE_TAG_SHA }}" >> "$GITHUB_ENV"
@@ -99,7 +98,7 @@ jobs:
 
       - name: Debug env
         run: |
-          echo "AWS_REGION=${{ env.AWS_REGION }}"
+          echo "AWS_REGION(top-level)=${{ env.AWS_REGION }}"
           echo "TF_VAR_backend_image=${{ env.TF_VAR_backend_image }}"
           echo "TF_VAR_frontend_image=${{ env.TF_VAR_frontend_image }}"
 
@@ -109,7 +108,7 @@ jobs:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region:            ${{ env.AWS_REGION }}   # ← top-level env wordt hier prima gelezen
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -119,9 +118,9 @@ jobs:
       - name: Terraform Apply
         working-directory: ./infra
         env:
-          # nu bestaan ze gegarandeerd als env’s
           TF_VAR_backend_image:  ${{ env.TF_VAR_backend_image }}
           TF_VAR_frontend_image: ${{ env.TF_VAR_frontend_image }}
         run: |
           terraform init -input=false
           terraform apply -auto-approve
+
