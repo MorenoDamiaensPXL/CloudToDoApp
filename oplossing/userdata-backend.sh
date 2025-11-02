@@ -28,4 +28,4 @@ sudo docker run -d \
   --link mongodb \
   -p 3000:3000 \
   -e DBURL="mongodb://root:password@mongodb:27017/sampledb?authSource=admin" \
-  evrendem/todo-backend:latest
+  dynamoz/todo-backend:latest
