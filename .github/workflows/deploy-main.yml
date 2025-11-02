@@ -1,0 +1,93 @@
+name: 3-tier Infra + DockerHub + Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & Push backend image
+        run: |
+          echo " Building backend image ..."
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/todo-backend:latest ./backend
+          docker push ${{ secrets.DOCKER_USERNAME }}/todo-backend:latest
+
+      - name: Backend image info
+        run: |
+          echo " Backend image pushed to Docker Hub:"
+          echo "    docker.io/${{ secrets.DOCKER_USERNAME }}/todo-backend:latest"
+
+
+  frontend:
+    runs-on: ubuntu-latest
+    needs: backend  # wait for backend image to finish
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & Push frontend image
+        run: |
+          docker build \
+            --build-arg APIURL="${{ secrets.BACKEND_API_URL }}" \
+            -t ${{ secrets.DOCKER_USERNAME }}/todo-frontend:latest ./frontend
+          docker push ${{ secrets.DOCKER_USERNAME }}/todo-frontend:latest
+
+
+      - name: Frontend image info
+        run: |
+          echo " Frontend image pushed to Docker Hub:"
+          echo "    docker.io/${{ secrets.DOCKER_USERNAME }}/todo-frontend:latest"
+
+
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]   # waits until both Docker images are ready
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        working-directory: ./oplossing
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./oplossing
+        run: terraform plan -var "key_name=${{ secrets.EC2_KEY_NAME }}" -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./oplossing
+        run: terraform apply -auto-approve tfplan

@@ -1,10 +1,11 @@
 {
   "name": "backend",
   "version": "1.0.0",
+  "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "jest --coverage --runInBand --passWithNoTests"
+    "test": "jest",
+    "start": "node server.js"
   },
   "author": "Dries Swinnen",
   "license": "ISC",
