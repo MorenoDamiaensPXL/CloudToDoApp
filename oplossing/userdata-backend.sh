@@ -1,31 +1,61 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Install Docker
-sudo apt update -y
-sudo apt install -y docker.io
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker ubuntu
+# -------- Config van Terraform (templatefile) --------
+DOCKER_NS_RAW="${DOCKER_NS:-}"
+BACKEND_DIGEST="${BACKEND_DIGEST:-}"
+MONGO_REF="${MONGO_REF:-docker.io/library/mongo:7.0.14}"
+DBURL="${DBURL:-mongodb://root:password@mongodb:27017/sampledb?authSource=admin}"
 
-# Run MongoDB
-sudo docker run -d \
-  --name mongodb \
+# Forceer lowercase namespace
+DOCKER_NS="$(echo "${DOCKER_NS_RAW}" | tr '[:upper:]' '[:lower:]')"
+
+# -------- Basis packages + Docker --------
+apt-get update -y
+apt-get install -y docker.io curl
+systemctl enable docker
+systemctl start docker
+usermod -aG docker ubuntu || true
+
+# Netwerk voor app
+docker network create todo-net || true
+
+# Pull exact images (immutabel via digest waar mogelijk)
+if [ -n "${BACKEND_DIGEST}" ]; then
+  BACKEND_REF="docker.io/${DOCKER_NS}/todo-backend@${BACKEND_DIGEST}"
+else
+  # fallback (zou niet moeten gebeuren als CI digest doorgeeft)
+  BACKEND_REF="docker.io/${DOCKER_NS}/todo-backend:latest"
+fi
+
+docker pull "${MONGO_REF}"
+docker pull "${BACKEND_REF}"
+
+# MongoDB (met healthcheck)
+docker rm -f mongodb 2>/dev/null || true
+docker run -d --name mongodb --network todo-net \
   -p 27017:27017 \
   -e MONGO_INITDB_ROOT_USERNAME=root \
   -e MONGO_INITDB_ROOT_PASSWORD=password \
-  mongo:7
+  --restart unless-stopped \
+  --health-cmd='mongo --quiet --eval "db.runCommand({ ping: 1 })" || exit 1' \
+  --health-interval=20s --health-timeout=5s --health-retries=6 \
+  "${MONGO_REF}"
 
-# Wait for MongoDB to initialize
-sleep 10
+# Wacht tot Mongo healthy is
+echo "Wachten tot MongoDB healthy is..."
+for i in $(seq 1 30); do
+  if docker inspect --format='{{json .State.Health.Status}}' mongodb 2>/dev/null | grep -q healthy; then
+    echo "MongoDB is healthy."
+    break
+  fi
+  sleep 2
+done
 
-# Pull latest backend
-sudo docker pull evrendem/todo-backend:latest
-
-# Run backend and connect to MongoDB
-sudo docker run -d \
-  --name todo-backend \
-  --link mongodb \
+# Backend
+docker rm -f todo-backend 2>/dev/null || true
+docker run -d --name todo-backend --network todo-net \
   -p 3000:3000 \
-  -e DBURL="mongodb://root:password@mongodb:27017/sampledb?authSource=admin" \
-  dynamoz/todo-backend:latest
+  -e DBURL="${DBURL}" \
+  --restart unless-stopped \
+  "${BACKEND_REF}"

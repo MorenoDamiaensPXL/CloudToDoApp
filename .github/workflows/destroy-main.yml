@@ -1,0 +1,74 @@
+name: Destroy Infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Typ EXACT 'DESTROY' om te bevestigen"
+        required: true
+      plan_only:
+        description: "Alleen plan draaien (true/false)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: destroy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WORKDIR: ./oplossing
+  AWS_REGION: us-east-1
+
+jobs:
+  destroy:
+    if: ${{ github.event.inputs.confirm == 'DESTROY' }}
+    runs-on: ubuntu-latest
+    environment: production   # optioneel: zet Environment protection aan
+    env:
+      # Voor destroy heeft Terraform je variabelen nog steeds nodig om de config te evalueren.
+      # Dummy/placeholder waarden zijn voldoende; ze worden niet gebruikt om nieuwe resources te maken.
+      TF_VAR_docker_ns: placeholder
+      TF_VAR_backend_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      TF_VAR_frontend_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      TF_VAR_mongo_digest: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init (remote state)
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform init -input=false -no-color
+
+      - name: Terraform Show Current State (optioneel)
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform show -no-color || true
+
+      - name: Terraform Plan -destroy
+        id: plan
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform plan -destroy \
+            -var "key_name=${{ secrets.EC2_KEY_NAME }}" \
+            -input=false -no-color -out=tfdestroy
+
+      - name: Stop after plan (als plan_only=true)
+        if: ${{ github.event.inputs.plan_only == 'true' }}
+        run: echo "Plan-only aangevraagd; destroy niet uitgevoerd."
+
+      - name: Terraform Apply destroy
+        if: ${{ github.event.inputs.plan_only != 'true' }}
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform apply -input=false -no-color -auto-approve tfdestroy

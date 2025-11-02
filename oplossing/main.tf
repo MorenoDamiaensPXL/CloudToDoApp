@@ -1,16 +1,31 @@
-############################################
-# Provider
-############################################
+terraform {
+  required_version = "~> 1.8.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.60"
+    }
+  }
+  # (Aanrader) Remote state via S3 + DynamoDB; laat weg als je nog geen backend hebt
+  # backend "s3" {
+  #   bucket         = "tf-state-todo-prod"
+  #   key            = "oplossing/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   dynamodb_table = "tf-state-locks"
+  #   encrypt        = true
+  # }
+}
+
 provider "aws" {
   region = var.my_region
 }
 
-############################################
+############################
 # VPC + Networking
-############################################
+############################
 resource "aws_vpc" "main" {
   cidr_block = "172.16.0.0/16"
-  tags = { Name = "todo-vpc" }
+  tags       = { Name = "todo-vpc" }
 }
 
 resource "aws_subnet" "public" {
@@ -18,22 +33,20 @@ resource "aws_subnet" "public" {
   cidr_block              = "172.16.1.0/24"
   map_public_ip_on_launch = true
   availability_zone       = "us-east-1a"
-  tags = { Name = "todo-public-subnet" }
+  tags                    = { Name = "todo-public-subnet" }
 }
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "todo-igw" }
+  tags   = { Name = "todo-igw" }
 }
 
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
-
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-
   tags = { Name = "todo-public-rt" }
 }
 
@@ -42,14 +55,14 @@ resource "aws_route_table_association" "public_assoc" {
   route_table_id = aws_route_table.public_rt.id
 }
 
-############################################
+############################
 # Security Group
-############################################
+############################
 resource "aws_security_group" "web_sg" {
   name   = "todo-sg"
   vpc_id = aws_vpc.main.id
 
-  # SSH - beperk tot jouw IP
+  # SSH beperkt
   ingress {
     from_port   = 22
     to_port     = 22
@@ -57,7 +70,7 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = [var.allowed_client_cidr]
   }
 
-  # HTTP voor frontend
+  # Frontend HTTP
   ingress {
     from_port   = 80
     to_port     = 80
@@ -65,18 +78,10 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Backend (indien publiek nodig; anders weglaten)
+  # Backend HTTP voor API GW proxy (HTTP API gebruikt publieke endpoint)
   ingress {
     from_port   = 3000
     to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Optioneel: admin/debug poort
-  ingress {
-    from_port   = 8090
-    to_port     = 8090
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -91,9 +96,9 @@ resource "aws_security_group" "web_sg" {
   tags = { Name = "todo-sg" }
 }
 
-############################################
-# EC2 Instances (user_data via templatefile)
-############################################
+############################
+# EC2 (immutable via digest + replace on change)
+############################
 resource "aws_instance" "frontend" {
   ami                    = var.ami
   instance_type          = var.my_instance_type
@@ -101,7 +106,13 @@ resource "aws_instance" "frontend" {
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   key_name               = var.key_name
 
-  user_data = templatefile("${path.module}/userdata-frontend.sh", {})
+  user_data = templatefile("${path.module}/userdata-frontend.sh", {
+    DOCKER_NS      = var.docker_ns
+    FRONTEND_DIGEST= var.frontend_digest
+  })
+
+  # Belangrijk voor immutable updates
+  user_data_replace_on_change = true
 
   tags = { Name = "frontend-ec2" }
 }
@@ -113,22 +124,32 @@ resource "aws_instance" "backend" {
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   key_name               = var.key_name
 
-  user_data = templatefile("${path.module}/userdata-backend.sh", {})
+  user_data = templatefile("${path.module}/userdata-backend.sh", {
+    DOCKER_NS     = var.docker_ns
+    BACKEND_DIGEST= var.backend_digest
+    # Gebruik digest indien opgegeven, anders fallback tag (minder immutable)
+    MONGO_REF     = var.mongo_digest != "" ? "docker.io/library/mongo@${var.mongo_digest}" : "docker.io/library/mongo:7.0.14"
+    DBURL         = "mongodb://root:password@mongodb:27017/sampledb?authSource=admin"
+  })
+
+  user_data_replace_on_change = true
 
   tags = { Name = "backend-ec2" }
 }
 
-############################################
-# Elastic IPs (beheerd door Terraform)
-############################################
+############################
+# Elastic IPs
+############################
 resource "aws_eip" "frontend_eip" {
   domain = "vpc"
-  tags = { Name = "todo-frontend-eip" }
+  tags   = { Name = "todo-frontend-eip" }
+  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_eip" "backend_eip" {
   domain = "vpc"
-  tags = { Name = "todo-backend-eip" }
+  tags   = { Name = "todo-backend-eip" }
+  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_eip_association" "frontend_eip_assoc" {
@@ -141,9 +162,9 @@ resource "aws_eip_association" "backend_eip_assoc" {
   allocation_id = aws_eip.backend_eip.id
 }
 
-############################################
-# API Gateway v2 (HTTP) als reverse proxy naar backend EIP
-############################################
+############################
+# API Gateway v2 (HTTP) + expliciete deployment
+############################
 resource "aws_apigatewayv2_api" "todo_api" {
   name          = "todo-api"
   protocol_type = "HTTP"
@@ -153,7 +174,6 @@ resource "aws_apigatewayv2_integration" "todo_integration" {
   api_id                 = aws_apigatewayv2_api.todo_api.id
   integration_type       = "HTTP_PROXY"
   integration_method     = "ANY"
-  # Proxy naar backend-EC2 via z'n EIP (poorten/paths doorgegeven via {proxy})
   integration_uri        = "http://${aws_eip.backend_eip.public_ip}:3000/{proxy}"
   payload_format_version = "1.0"
 }
@@ -164,9 +184,47 @@ resource "aws_apigatewayv2_route" "todo_route" {
   target    = "integrations/${aws_apigatewayv2_integration.todo_integration.id}"
 }
 
-resource "aws_apigatewayv2_stage" "todo_stage" {
-  api_id      = aws_apigatewayv2_api.todo_api.id
-  name        = "$default"
-  auto_deploy = true
+# Expliciete deployment + stage (immutable)
+resource "aws_apigatewayv2_deployment" "todo_deploy" {
+  api_id = aws_apigatewayv2_api.todo_api.id
+
+  # Force nieuwe deployment zodra integratie/route wijzigt
+  triggers = {
+    config = sha1(jsonencode({
+      integration = aws_apigatewayv2_integration.todo_integration.id
+      route       = aws_apigatewayv2_route.todo_route.route_key
+    }))
+  }
+
+  depends_on = [aws_apigatewayv2_route.todo_route]
 }
 
+resource "aws_apigatewayv2_stage" "todo_stage" {
+  api_id        = aws_apigatewayv2_api.todo_api.id
+  name          = "prod"
+  auto_deploy   = false
+  deployment_id = aws_apigatewayv2_deployment.todo_deploy.id
+}
+
+############################
+# Outputs
+############################
+output "api_gateway_url" {
+  value       = aws_apigatewayv2_api.todo_api.api_endpoint
+  description = "Invoke URL van de HTTP API"
+}
+
+output "public_route_table_id" {
+  description = "ID van de public route table"
+  value       = aws_route_table.public_rt.id
+}
+
+output "internet_gateway_id" {
+  value       = aws_internet_gateway.igw.id
+  description = "ID van de Internet Gateway"
+}
+
+output "static_ip" {
+  description = "Static public IP van de frontend EC2 (EIP)"
+  value       = aws_eip.frontend_eip.public_ip
+}
