@@ -7,8 +7,8 @@ on:
 permissions:
   contents: read
 env:
-  BACKEND_IMAGE: "12301302/cloud2_backend:latest"
-  FRONTEND_IMAGE: "12301302/cloud2_frontend:latest"
+  BACKEND_IMAGE: "dynamoz/cloud2_backend:latest"
+  FRONTEND_IMAGE: "dynamoz/cloud2_frontend:latest"
 jobs:
   frontend:
     runs-on: ubuntu-latest
